@@ -1,14 +1,11 @@
 import streamlit as st
 import pandas as pd
+from datetime import date
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
-from datetime import date
 import io
 
-def data_process(raw_file, mapping_file):
-    df = pd.read_excel(raw_file)
-    mapping_df = pd.read_excel(mapping_file)
-
+def data_process(df_raw, mapping_df):
     correction_dict = dict(zip(mapping_df['wrong_address'], mapping_df['right_address']))
     valid_addresses = set(mapping_df['right_address'])
 
@@ -20,22 +17,22 @@ def data_process(raw_file, mapping_file):
         else:
             return addr, "unknown", "未出现在映射表中，请人工确认"
 
-    df[['corrected_address', 'status', 'remark']] = df['address'].apply(
+    df_raw[['corrected_address', 'status', 'remark']] = df_raw['address'].apply(
         lambda x: pd.Series(correct_address(x))
     )
 
     # 写入内存中的 Excel 文件
     output = io.BytesIO()
-    df.to_excel(output, index=False)
+    df_raw.to_excel(output, index=False)
     output.seek(0)
 
-    # 标红 unknown
+    # 标红 unknown 行
     wb = load_workbook(output)
     ws = wb.active
 
     red_fill = PatternFill(start_color="FF9999", end_color="FF9999", fill_type="solid")
 
-    status_col = None
+    # 找到 status 列
     for idx, cell in enumerate(ws[1], start=1):
         if cell.value == "status":
             status_col = idx
@@ -46,26 +43,35 @@ def data_process(raw_file, mapping_file):
             for cell in row:
                 cell.fill = red_fill
 
-    # 重新保存到 BytesIO 并返回
+    # 保存为最终内存文件
     final_output = io.BytesIO()
     wb.save(final_output)
     final_output.seek(0)
     return final_output
 
-# === Streamlit UI ===
+# === Streamlit 界面 ===
 st.title("📍 地址纠错工具")
+st.markdown("请上传待判断的地址文件（**需包含一列名为 `address`**）")
 
-raw_file = st.file_uploader("上传原始地址文件（需包含 'address' 列）", type=["xlsx"])
-mapping_file = st.file_uploader("上传地址映射表（包含 'wrong_address', 'right_address'）", type=["xlsx"])
+uploaded_file = st.file_uploader("上传 Excel 文件（.xlsx）", type=["xlsx"])
 
-if raw_file and mapping_file:
-    if st.button("🚀 开始处理"):
-        result_file = data_process(raw_file, mapping_file)
-        today_str = date.today().isoformat()
-        st.success("处理完成！点击下方按钮下载结果👇")
-        st.download_button(
-            label="📥 下载结果文件",
-            data=result_file,
-            file_name=f"corrected_{today_str}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+if uploaded_file:
+    try:
+        df_raw = pd.read_excel(uploaded_file)
+        mapping_df = pd.read_excel("address_book.xlsx")  # 读取本地映射表
+
+        if 'address' not in df_raw.columns:
+            st.error("❌ 上传文件中缺少名为 'address' 的列")
+        else:
+            if st.button("🚀 开始处理"):
+                result_file = data_process(df_raw, mapping_df)
+                today_str = date.today().isoformat()
+                st.success("✅ 处理完成！点击下方按钮下载结果")
+                st.download_button(
+                    label="📥 下载处理结果",
+                    data=result_file,
+                    file_name=f"corrected_{today_str}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+    except Exception as e:
+        st.error(f"❌ 文件读取失败：{e}")
